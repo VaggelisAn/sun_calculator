@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Sun Shade Sensor Viewer</title>
+  <style>
+    body { font-family: Inter, Arial, sans-serif; margin: 12px; background: linear-gradient(180deg, #f3f7ff 0%, #eff7ff 100%); color: #0f172a; }
+    h1 { margin: 0 0 10px; font-size: 1.5rem; color: #0f172a; }
+    .panel { background: #ffffff; border-radius: 22px; padding: 18px; box-shadow: 0 22px 44px rgba(15,23,42,0.1); margin-bottom: 18px; border: 1px solid #e2e8f0; }
+    label { display: block; margin-top: 10px; font-size: 0.95rem; color: #334155; }
+    input[type=range] { width: 100%; margin-top: 10px; }
+    button { width: 100%; padding: 14px 16px; margin-top: 12px; background: #2563eb; color: white; border: none; border-radius: 14px; font-size: 1rem; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+    .status div { background: #f8fafc; border-radius: 14px; padding: 14px; font-size: 0.92rem; color: #334155; }
+    canvas { width: 100%; max-width: 1200px; height: auto; border-radius: 18px; border: 1px solid #dbeafe; background: #ffffff; box-shadow: 0 18px 40px rgba(15,23,42,0.08); }
+    .note { margin-top: 10px; font-size: 0.9rem; color: #475569; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <button id="startBtn">Request Location & Compass</button>
+    <div class="status">
+      <div><strong>Latitude</strong><div id="latVal">--</div></div>
+      <div><strong>Longitude</strong><div id="lonVal">--</div></div>
+      <div><strong>Date</strong><div id="dateVal">--</div></div>
+      <div><strong>Face Azimuth</strong><div id="faceVal">--</div></div>
+    </div>
+    <label>
+      Manual face direction
+      <input id="manualAz" type="range" min="0" max="359" value="180" />
+    </label>
+    <div class="note">Move the phone to update the facing direction. If sensors are unavailable, use the slider.</div>
+  </div>
+
+  <div class="panel">
+    <canvas id="chart" width="1200" height="560"></canvas>
+    <div class="note" id="infoText"></div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('chart');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const manualAz = document.getElementById('manualAz');
+    const latVal = document.getElementById('latVal');
+    const lonVal = document.getElementById('lonVal');
+    const dateVal = document.getElementById('dateVal');
+    const faceVal = document.getElementById('faceVal');
+    const infoText = document.getElementById('infoText');
+
+    const state = {
+      latitude: null,
+      longitude: null,
+      faceAzimuth: 180,
+      date: new Date(),
+      hasLocation: false,
+      hasCompass: false,
+      appFaceSource: false,
+      lastAppPayload: ''
+    };
+
+    function parseQueryString(queryString) {
+      const params = {};
+      if (!queryString) return params;
+      const query = queryString.startsWith('?') ? queryString.substring(1) : queryString;
+      if (!query) return params;
+      query.split('&').forEach(pair => {
+        const [key, value] = pair.split('=');
+        if (!key) return;
+        params[decodeURIComponent(key)] = decodeURIComponent(value || '');
+      });
+      return params;
+    }
+
+    function applyParams(params) {
+      if (params.lat && params.lon) {
+        const lat = Number(params.lat);
+        const lon = Number(params.lon);
+        if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+          state.latitude = lat;
+          state.longitude = lon;
+          state.hasLocation = true;
+        }
+      }
+      if (params.heading && !params.face) {
+        params.face = params.heading;
+      }
+      if (params.face) {
+        const face = Number(params.face);
+        if (!Number.isNaN(face)) {
+          state.faceAzimuth = ((face % 360) + 360) % 360;
+          state.hasCompass = true;
+          state.appFaceSource = true;
+        }
+      }
+      if (params.date) {
+        const d = new Date(params.date);
+        if (!Number.isNaN(d.valueOf())) {
+          state.date = d;
+        }
+      }
+    }
+
+    function applyUrlParams() {
+      applyParams(parseQueryString(window.location.search));
+    }
+
+    function applyAppInventorParams() {
+      const ai2 = (typeof window.AppInventor === 'object' && window.AppInventor)
+        || (typeof AppInventor === 'object' && AppInventor);
+      if (!ai2 || typeof ai2.getWebViewString !== 'function') {
+        return;
+      }
+      const payload = ai2.getWebViewString();
+      if (!payload || payload === state.lastAppPayload) return;
+      state.lastAppPayload = payload;
+      const trimmed = payload.trim();
+      let params = {};
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed === 'object') {
+            params = parsed;
+          }
+        } catch (_) {
+          // ignore invalid JSON
+        }
+      }
+      if (!Object.keys(params).length) {
+        params = parseQueryString(trimmed);
+      }
+      if (!Object.keys(params).length && /^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+        params.face = trimmed;
+      }
+      applyParams(params);
+    }
+
+    const toRadians = deg => deg * Math.PI / 180;
+    const toDegrees = rad => rad * 180 / Math.PI;
+
+    function dayOfYear(date) {
+      const start = new Date(Date.UTC(date.getUTCFullYear(), 0, 0));
+      return Math.floor((date - start) / 86400000);
+    }
+
+    function approximateTimezoneOffset(longitude) {
+      const offset = Math.round(longitude / 15);
+      return Math.max(-12, Math.min(14, offset));
+    }
+
+    function solarPosition(dtUtc, latitude, longitude, localOffsetHours) {
+      const localMs = dtUtc.getTime() + localOffsetHours * 3600 * 1000;
+      const local = new Date(localMs);
+      const n = dayOfYear(local);
+      const utcHour = dtUtc.getUTCHours() + dtUtc.getUTCMinutes()/60 + dtUtc.getUTCSeconds()/3600;
+      const gamma = 2 * Math.PI / 365 * (n - 1 + (utcHour - 12) / 24);
+      const eqtime = 229.18 * (0.000075 + 0.001868 * Math.cos(gamma) - 0.032077 * Math.sin(gamma)
+        - 0.014615 * Math.cos(2*gamma) - 0.040849 * Math.sin(2*gamma));
+      const decl = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma)
+        - 0.006758 * Math.cos(2*gamma) + 0.000907 * Math.sin(2*gamma)
+        - 0.002697 * Math.cos(3*gamma) + 0.00148 * Math.sin(3*gamma);
+      const localHour = local.getUTCHours() + local.getUTCMinutes()/60 + local.getUTCSeconds()/3600;
+      const timeOffset = eqtime + 4 * longitude - 60 * localOffsetHours;
+      const tst = localHour * 60 + timeOffset;
+      const hourAngle = tst / 4 - 180;
+      const latRad = toRadians(latitude);
+      const haRad = toRadians(hourAngle);
+      const cosZenith = Math.max(-1, Math.min(1,
+        Math.sin(latRad) * Math.sin(decl) +
+        Math.cos(latRad) * Math.cos(decl) * Math.cos(haRad)
+      ));
+      const zenith = Math.acos(cosZenith);
+      const elevation = 90 - toDegrees(zenith);
+      const sinAz = -(Math.sin(haRad) * Math.cos(decl)) / Math.sin(zenith);
+      const cosAz = (Math.sin(decl) - Math.sin(latRad) * Math.cos(zenith)) /
+        (Math.cos(latRad) * Math.sin(zenith));
+      const azimuth = (toDegrees(Math.atan2(sinAz, cosAz)) + 360) % 360;
+      return { elevation, azimuth };
+    }
+
+    function illuminationStrength(sunAz, sunEl, faceAz) {
+      if (sunEl <= 0) return 0;
+      const azRad = toRadians(sunAz);
+      const elRad = toRadians(sunEl);
+      const faceRad = toRadians(faceAz);
+      const sx = Math.cos(elRad) * Math.sin(azRad);
+      const sy = Math.cos(elRad) * Math.cos(azRad);
+      const sz = Math.sin(elRad);
+      const nx = Math.sin(faceRad);
+      const ny = Math.cos(faceRad);
+      const nz = 0;
+      return Math.max(0, sx*nx + sy*ny + sz*nz);
+    }
+
+    function normalize(arr) {
+      const max = Math.max(...arr);
+      return max === 0 ? arr : arr.map(v => v / max);
+    }
+
+    function formatTime(date) {
+      const hours = date.getUTCHours().toString().padStart(2, '0');
+      const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
+
+    function azimuthToCompass(angle) {
+      const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+      const index = Math.round(((angle % 360) + 360) % 360 / 45) % 8;
+      return directions[index];
+    }
+
+    function createHatchPattern(color) {
+      const patternCanvas = document.createElement('canvas');
+      patternCanvas.width = 8;
+      patternCanvas.height = 8;
+      const pc = patternCanvas.getContext('2d');
+      pc.strokeStyle = color;
+      pc.lineWidth = 1;
+      pc.beginPath();
+      pc.moveTo(0, 8);
+      pc.lineTo(8, 0);
+      pc.stroke();
+      return ctx.createPattern(patternCanvas, 'repeat');
+    }
+
+    function formatLocalTime(date, offset) {
+      const localMs = date.getTime() + offset * 3600 * 1000;
+      const local = new Date(localMs);
+      const h = local.getUTCHours().toString().padStart(2, '0');
+      const m = local.getUTCMinutes().toString().padStart(2, '0');
+      return `${h}:${m}`;
+    }
+
+    function drawChart(times, elevation, illumination, tzLabel) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const margin = 60;
+      const width = canvas.width - margin * 2;
+      const height = canvas.height - margin * 2;
+      const count = times.length;
+
+      ctx.strokeStyle = 'rgba(148,163,184,0.28)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 6; i++) {
+        const y = margin + i * (height / 6);
+        ctx.beginPath();
+        ctx.moveTo(margin, y);
+        ctx.lineTo(canvas.width - margin, y);
+        ctx.stroke();
+      }
+      for (let i = 0; i <= 6; i++) {
+        const x = margin + i * (width / 6);
+        ctx.beginPath();
+        ctx.moveTo(x, margin);
+        ctx.lineTo(x, canvas.height - margin);
+        ctx.stroke();
+      }
+
+      ctx.font = '13px Inter, Arial';
+      ctx.fillStyle = '#0f172a';
+      ctx.fillText('Local timezone: ' + tzLabel, margin, 24);
+      ctx.fillText('Face azimuth: ' + Math.round(state.faceAzimuth) + '°', margin, 46);
+      ctx.fillText('Sun elevation (blue)', margin, 68);
+      ctx.fillText('Face illumination (orange dashed)', margin, 86);
+
+      const pattern = createHatchPattern('rgba(59, 130, 246, 0.30)');
+      ctx.fillStyle = pattern;
+      ctx.beginPath();
+      elevation.forEach((value, index) => {
+        const x = margin + (index / Math.max(1, count - 1)) * width;
+        const y = canvas.height - margin - value * height;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      for (let index = count - 1; index >= 0; index--) {
+        const x = margin + (index / Math.max(1, count - 1)) * width;
+        const y = canvas.height - margin - illumination[index] * height;
+        ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(37,99,235,0.2)';
+      ctx.shadowBlur = 14;
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 4;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      elevation.forEach((value, index) => {
+        const x = margin + (index / Math.max(1, count - 1)) * width;
+        const y = canvas.height - margin - value * height;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.strokeStyle = '#fb923c';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 5]);
+      ctx.beginPath();
+      illumination.forEach((value, index) => {
+        const x = margin + (index / Math.max(1, count - 1)) * width;
+        const y = canvas.height - margin - value * height;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#334155';
+      ctx.font = '12px Arial';
+      const labelCount = Math.min(6, Math.max(1, count - 1));
+      for (let i = 0; i <= labelCount; i++) {
+        const idx = Math.round((i / labelCount) * (count - 1));
+        const x = margin + (idx / Math.max(1, count - 1)) * width;
+        const label = formatTime(times[idx]);
+        ctx.fillText(label, x - 18, canvas.height - margin + 18);
+      }
+      ctx.fillText('0.0', 10, canvas.height - margin);
+      ctx.fillText('1.0', 12, margin + 14);
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(margin, margin, width, height);
+      ctx.fillStyle = '#2563eb';
+      ctx.fillRect(canvas.width - margin - 260, margin + 10, 14, 14);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillText('Sun elevation', canvas.width - margin - 236, margin + 22);
+      ctx.fillStyle = '#f97316';
+      ctx.fillRect(canvas.width - margin - 260, margin + 36, 14, 14);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillText('Face illumination', canvas.width - margin - 236, margin + 48);
+    }
+
+    function updateStatus() {
+      latVal.textContent = state.latitude !== null ? state.latitude.toFixed(6) : '--';
+      lonVal.textContent = state.longitude !== null ? state.longitude.toFixed(6) : '--';
+      dateVal.textContent = state.date.toISOString().slice(0, 10);
+      faceVal.textContent = `${Math.round(state.faceAzimuth)}° ${azimuthToCompass(state.faceAzimuth)}`;
+      manualAz.value = Math.round(state.faceAzimuth);
+      render();
+    }
+
+    function handleOrientation(event) {
+      if (state.appFaceSource) return;
+      if (event.alpha === null) return;
+      let az = event.alpha;
+      if (typeof event.webkitCompassHeading === 'number') {
+        az = event.webkitCompassHeading;
+      }
+      az = (az + 360) % 360;
+      state.faceAzimuth = az;
+      state.hasCompass = true;
+      updateStatus();
+    }
+
+    function startSensors() {
+      if ('geolocation' in navigator) {
+        navigator.geolocation.watchPosition(position => {
+          state.latitude = position.coords.latitude;
+          state.longitude = position.coords.longitude;
+          state.hasLocation = true;
+          state.date = new Date();
+          updateStatus();
+        }, err => {
+          infoText.textContent = 'Location access denied or unavailable.';
+        }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 });
+      } else {
+        infoText.textContent = 'Geolocation not supported.';
+      }
+
+      if (window.DeviceOrientationEvent) {
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+          DeviceOrientationEvent.requestPermission().then(permissionState => {
+            if (permissionState === 'granted') {
+              window.addEventListener('deviceorientation', handleOrientation);
+            } else {
+              infoText.textContent = 'Compass permission denied.';
+            }
+          }).catch(() => {
+            infoText.textContent = 'Compass permission not granted.';
+          });
+        } else {
+          window.addEventListener('deviceorientation', handleOrientation);
+        }
+      } else {
+        infoText.textContent = 'Device orientation not supported.';
+      }
+    }
+
+    function render() {
+      applyUrlParams();
+      applyAppInventorParams();
+      const hasLocation = state.latitude !== null && state.longitude !== null;
+      const lat = hasLocation ? state.latitude : 37.99;
+      const lon = hasLocation ? state.longitude : 23.66;
+      const faceAzimuth = state.faceAzimuth;
+      const date = state.date || new Date();
+      const localOffset = approximateTimezoneOffset(lon);
+      const tzLabel = 'UTC' + (localOffset >= 0 ? '+' + localOffset : localOffset);
+      const [year, month, day] = date.toISOString().slice(0, 10).split('-').map(Number);
+      const startLocal = Date.UTC(year, month - 1, day, 0, 0) - localOffset * 3600 * 1000;
+      const points = [];
+      const stepMinutes = 5;
+      const steps = 24 * 60 / stepMinutes;
+      for (let i = 0; i <= steps; i++) {
+        const currentUtc = new Date(startLocal + i * stepMinutes * 60000);
+        const pos = solarPosition(currentUtc, lat, lon, localOffset);
+        const illum = illuminationStrength(pos.azimuth, pos.elevation, faceAzimuth);
+        points.push({ time: new Date(currentUtc.getTime() + localOffset * 3600 * 1000), elevation: pos.elevation, illumination: illum });
+      }
+      const sunriseIndex = points.findIndex(p => p.elevation > 0);
+      const sunsetIndex = points.length - 1 - [...points].reverse().findIndex(p => p.elevation > 0);
+      const clipStart = sunriseIndex >= 0 ? Math.max(0, sunriseIndex - 1) : 0;
+      const clipEnd = sunsetIndex >= 0 ? Math.min(points.length, sunsetIndex + 1) : points.length;
+      const clipped = points.slice(clipStart, clipEnd);
+      const normalizedElevation = normalize(clipped.map(p => Math.max(0, p.elevation)));
+      const normalizedIllumination = normalize(clipped.map(p => p.illumination));
+      drawChart(clipped.map(p => p.time), normalizedElevation, normalizedIllumination, tzLabel);
+      const sunriseText = hasLocation && sunriseIndex >= 0 ? formatLocalTime(points[sunriseIndex].time, 0) : '--';
+      const sunsetText = hasLocation && sunsetIndex >= 0 ? formatLocalTime(points[sunsetIndex].time, 0) : '--';
+      const directionText = azimuthToCompass(faceAzimuth);
+      const locationNote = hasLocation ? '' : ' (location pending, using Athens coords)';
+      infoText.textContent = `Latitude=${hasLocation ? lat.toFixed(6) : '--'}, Longitude=${hasLocation ? lon.toFixed(6) : '--'}, face=${Math.round(faceAzimuth)}° ${directionText}, local ${tzLabel}${locationNote}, sunrise=${sunriseText}, sunset=${sunsetText}`;
+    }
+
+    manualAz.addEventListener('input', event => {
+      state.faceAzimuth = Number(event.target.value);
+      state.hasCompass = true;
+      state.appFaceSource = false;
+      updateStatus();
+    });
+
+    startBtn.addEventListener('click', () => {
+      startSensors();
+      startBtn.textContent = 'Sensors requested';
+    });
+
+    applyUrlParams();
+    applyAppInventorParams();
+    updateStatus();
+
+    setInterval(() => {
+      const oldLat = state.latitude;
+      const oldLon = state.longitude;
+      const oldFace = state.faceAzimuth;
+      applyUrlParams();
+      applyAppInventorParams();
+      if (state.latitude !== oldLat || state.longitude !== oldLon || state.faceAzimuth !== oldFace) {
+        updateStatus();
+      }
+    }, 500);
+  </script>
+</body>
+</html>
