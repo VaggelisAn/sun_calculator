@@ -398,7 +398,7 @@
       const lon = hasLocation ? state.longitude : 23.66;
       const faceAzimuth = state.faceAzimuth;
       const date = state.date || new Date();
-      const localOffset = approximateTimezoneOffset(lon);
+	  const localOffset = -new Date().getTimezoneOffset() / 60;
       const tzLabel = 'UTC' + (localOffset >= 0 ? '+' + localOffset : localOffset);
       const [year, month, day] = date.toISOString().slice(0, 10).split('-').map(Number);
       const startLocal = Date.UTC(year, month - 1, day, 0, 0) - localOffset * 3600 * 1000;
