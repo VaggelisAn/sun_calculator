@@ -5,33 +5,49 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
   <title>Sun Shade Sensor Viewer</title>
   <style>
-    body { font-family: Inter, Arial, sans-serif; margin: 12px; background: linear-gradient(180deg, #f3f7ff 0%, #eff7ff 100%); color: #0f172a; }
-    h1 { margin: 0 0 10px; font-size: 1.5rem; color: #0f172a; }
-    .panel { background: #ffffff; border-radius: 22px; padding: 18px; box-shadow: 0 22px 44px rgba(15,23,42,0.1); margin-bottom: 18px; border: 1px solid #e2e8f0; }
-    label { display: block; margin-top: 10px; font-size: 0.95rem; color: #334155; }
-    input[type=range] { width: 100%; margin-top: 10px; }
-    button { width: 100%; padding: 14px 16px; margin-top: 12px; background: #2563eb; color: white; border: none; border-radius: 14px; font-size: 1rem; cursor: pointer; }
-    button:hover { background: #1d4ed8; }
+    body { font-family: Inter, Arial, sans-serif; margin: 12px; background: linear-gradient(180deg, #0f172a 0%, #1c1917 100%); color: #e2e8f0; min-height: 100vh; }
+
+    h1 { margin: 0 0 10px; font-size: 1.5rem; color: #e2e8f0; display: flex; align-items: center; gap: 10px; }
+
+    .panel { background: rgba(255,255,255,0.05); border-radius: 22px; padding: 18px; box-shadow: 0 22px 44px rgba(0,0,0,0.4); margin-bottom: 18px; border: 1px solid rgba(148,163,184,0.15); backdrop-filter: blur(8px); }
+
+    button { width: 100%; padding: 14px 16px; margin-top: 12px; background: #d97706; color: white; border: none; border-radius: 14px; font-size: 1rem; cursor: pointer; font-weight: 600; transition: background 0.2s; }
+    button:hover { background: #b45309; }
+
     .status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
-    .status div { background: #f8fafc; border-radius: 14px; padding: 14px; font-size: 0.92rem; color: #334155; }
-    canvas { width: 100%; max-width: 1200px; height: auto; border-radius: 18px; border: 1px solid #dbeafe; background: #ffffff; box-shadow: 0 18px 40px rgba(15,23,42,0.08); }
-    .note { margin-top: 10px; font-size: 0.9rem; color: #475569; }
+    .status div { background: rgba(255,255,255,0.07); border-radius: 14px; padding: 14px; font-size: 0.92rem; color: #94a3b8; border: 1px solid rgba(148,163,184,0.1); }
+    .status div strong { display: block; color: #fde68a; margin-bottom: 4px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .status div span { color: #f1f5f9; font-size: 1rem; font-weight: 600; }
+
+    canvas { width: 100%; max-width: 1200px; height: auto; border-radius: 18px; border: 1px solid rgba(251,146,60,0.3); background: transparent; display: block; }
+
+    .note { margin-top: 10px; font-size: 0.88rem; color: #64748b; line-height: 1.5; }
+
+    label { display: block; margin-top: 12px; font-size: 0.9rem; color: #94a3b8; }
+
+    input[type=range] { width: 100%; margin-top: 8px; accent-color: #f97316; }
+
+    .sun-icon { font-size: 2rem; }
   </style>
 </head>
 <body>
+
   <div class="panel">
-    <button id="startBtn">Request Location & Compass</button>
+    <h1><span class="sun-icon">☀️</span> Sun Shade Sensor Viewer</h1>
+
     <div class="status">
-      <div><strong>Latitude</strong><div id="latVal">--</div></div>
-      <div><strong>Longitude</strong><div id="lonVal">--</div></div>
-      <div><strong>Date</strong><div id="dateVal">--</div></div>
-      <div><strong>Face Azimuth</strong><div id="faceVal">--</div></div>
+      <div><strong>Latitude</strong><span id="latVal">--</span></div>
+      <div><strong>Longitude</strong><span id="lonVal">--</span></div>
+      <div><strong>Date</strong><span id="dateVal">--</span></div>
+      <div><strong>Face Azimuth</strong><span id="faceVal">--</span></div>
     </div>
-    <label>
-      Manual face direction
+
+    <label>Manual face direction
       <input id="manualAz" type="range" min="0" max="359" value="180" />
     </label>
-    <div class="note">Move the phone to update the facing direction. If sensors are unavailable, use the slider.</div>
+
+    <button id="startBtn">📍 Request Location &amp; Compass</button>
+    <div class="note" id="statusNote">Move the phone to update the facing direction. If sensors are unavailable, use the slider. You can also send <code style="color:#fbbf24">lat=…&amp;lon=…&amp;face=…</code> from App Inventor.</div>
   </div>
 
   <div class="panel">
@@ -40,15 +56,16 @@
   </div>
 
   <script>
-    const canvas = document.getElementById('chart');
-    const ctx = canvas.getContext('2d');
-    const startBtn = document.getElementById('startBtn');
-    const manualAz = document.getElementById('manualAz');
-    const latVal = document.getElementById('latVal');
-    const lonVal = document.getElementById('lonVal');
-    const dateVal = document.getElementById('dateVal');
-    const faceVal = document.getElementById('faceVal');
-    const infoText = document.getElementById('infoText');
+    const canvas    = document.getElementById('chart');
+    const ctx       = canvas.getContext('2d');
+    const startBtn  = document.getElementById('startBtn');
+    const manualAz  = document.getElementById('manualAz');
+    const latVal    = document.getElementById('latVal');
+    const lonVal    = document.getElementById('lonVal');
+    const dateVal   = document.getElementById('dateVal');
+    const faceVal   = document.getElementById('faceVal');
+    const infoText  = document.getElementById('infoText');
+    const statusNote = document.getElementById('statusNote');
 
     const state = {
       latitude: null,
@@ -61,6 +78,7 @@
       lastAppPayload: ''
     };
 
+    // ─── App Inventor integration ─────────────────────────────────────────────
     function parseQueryString(queryString) {
       const params = {};
       if (!queryString) return params;
@@ -76,67 +94,40 @@
 
     function applyParams(params) {
       if (params.lat && params.lon) {
-        const lat = Number(params.lat);
-        const lon = Number(params.lon);
+        const lat = Number(params.lat), lon = Number(params.lon);
         if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
-          state.latitude = lat;
-          state.longitude = lon;
-          state.hasLocation = true;
+          state.latitude = lat; state.longitude = lon; state.hasLocation = true;
         }
       }
-      if (params.heading && !params.face) {
-        params.face = params.heading;
-      }
+      if (params.heading && !params.face) params.face = params.heading;
       if (params.face) {
         const face = Number(params.face);
         if (!Number.isNaN(face)) {
           state.faceAzimuth = ((face % 360) + 360) % 360;
-          state.hasCompass = true;
-          state.appFaceSource = true;
+          state.hasCompass = true; state.appFaceSource = true;
         }
       }
-      if (params.date) {
-        const d = new Date(params.date);
-        if (!Number.isNaN(d.valueOf())) {
-          state.date = d;
-        }
-      }
+      if (params.date) { const d = new Date(params.date); if (!Number.isNaN(d.valueOf())) state.date = d; }
     }
 
-    function applyUrlParams() {
-      applyParams(parseQueryString(window.location.search));
-    }
+    function applyUrlParams() { applyParams(parseQueryString(window.location.search)); }
 
     function applyAppInventorParams() {
       const ai2 = (typeof window.AppInventor === 'object' && window.AppInventor)
-        || (typeof AppInventor === 'object' && AppInventor);
-      if (!ai2 || typeof ai2.getWebViewString !== 'function') {
-        return;
-      }
+               || (typeof AppInventor !== 'undefined' && AppInventor);
+      if (!ai2 || typeof ai2.getWebViewString !== 'function') return;
       const payload = ai2.getWebViewString();
       if (!payload || payload === state.lastAppPayload) return;
       state.lastAppPayload = payload;
       const trimmed = payload.trim();
       let params = {};
-      if (trimmed.startsWith('{')) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          if (parsed && typeof parsed === 'object') {
-            params = parsed;
-          }
-        } catch (_) {
-          // ignore invalid JSON
-        }
-      }
-      if (!Object.keys(params).length) {
-        params = parseQueryString(trimmed);
-      }
-      if (!Object.keys(params).length && /^-?\d+(?:\.\d+)?$/.test(trimmed)) {
-        params.face = trimmed;
-      }
+      if (trimmed.startsWith('{')) { try { const p = JSON.parse(trimmed); if (p && typeof p === 'object') params = p; } catch(_){} }
+      if (!Object.keys(params).length) params = parseQueryString(trimmed);
+      if (!Object.keys(params).length && /^-?\d+(?:\.\d+)?$/.test(trimmed)) params.face = trimmed;
       applyParams(params);
     }
 
+    // ─── Solar math ───────────────────────────────────────────────────────────
     const toRadians = deg => deg * Math.PI / 180;
     const toDegrees = rad => rad * 180 / Math.PI;
 
@@ -146,8 +137,7 @@
     }
 
     function approximateTimezoneOffset(longitude) {
-      const offset = Math.round(longitude / 15);
-      return Math.max(-12, Math.min(14, offset));
+      return Math.max(-12, Math.min(14, Math.round(longitude / 15)));
     }
 
     function solarPosition(dtUtc, latitude, longitude, localOffsetHours) {
@@ -156,42 +146,33 @@
       const n = dayOfYear(local);
       const utcHour = dtUtc.getUTCHours() + dtUtc.getUTCMinutes()/60 + dtUtc.getUTCSeconds()/3600;
       const gamma = 2 * Math.PI / 365 * (n - 1 + (utcHour - 12) / 24);
-      const eqtime = 229.18 * (0.000075 + 0.001868 * Math.cos(gamma) - 0.032077 * Math.sin(gamma)
-        - 0.014615 * Math.cos(2*gamma) - 0.040849 * Math.sin(2*gamma));
-      const decl = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma)
-        - 0.006758 * Math.cos(2*gamma) + 0.000907 * Math.sin(2*gamma)
-        - 0.002697 * Math.cos(3*gamma) + 0.00148 * Math.sin(3*gamma);
+      const eqtime = 229.18 * (0.000075 + 0.001868*Math.cos(gamma) - 0.032077*Math.sin(gamma)
+        - 0.014615*Math.cos(2*gamma) - 0.040849*Math.sin(2*gamma));
+      const decl = 0.006918 - 0.399912*Math.cos(gamma) + 0.070257*Math.sin(gamma)
+        - 0.006758*Math.cos(2*gamma) + 0.000907*Math.sin(2*gamma)
+        - 0.002697*Math.cos(3*gamma) + 0.00148*Math.sin(3*gamma);
       const localHour = local.getUTCHours() + local.getUTCMinutes()/60 + local.getUTCSeconds()/3600;
       const timeOffset = eqtime + 4 * longitude - 60 * localOffsetHours;
       const tst = localHour * 60 + timeOffset;
       const hourAngle = tst / 4 - 180;
-      const latRad = toRadians(latitude);
-      const haRad = toRadians(hourAngle);
+      const latRad = toRadians(latitude), haRad = toRadians(hourAngle);
       const cosZenith = Math.max(-1, Math.min(1,
-        Math.sin(latRad) * Math.sin(decl) +
-        Math.cos(latRad) * Math.cos(decl) * Math.cos(haRad)
-      ));
+        Math.sin(latRad) * Math.sin(decl) + Math.cos(latRad) * Math.cos(decl) * Math.cos(haRad)));
       const zenith = Math.acos(cosZenith);
       const elevation = 90 - toDegrees(zenith);
       const sinAz = -(Math.sin(haRad) * Math.cos(decl)) / Math.sin(zenith);
-      const cosAz = (Math.sin(decl) - Math.sin(latRad) * Math.cos(zenith)) /
-        (Math.cos(latRad) * Math.sin(zenith));
+      const cosAz = (Math.sin(decl) - Math.sin(latRad) * Math.cos(zenith)) / (Math.cos(latRad) * Math.sin(zenith));
       const azimuth = (toDegrees(Math.atan2(sinAz, cosAz)) + 360) % 360;
       return { elevation, azimuth };
     }
 
     function illuminationStrength(sunAz, sunEl, faceAz) {
       if (sunEl <= 0) return 0;
-      const azRad = toRadians(sunAz);
-      const elRad = toRadians(sunEl);
-      const faceRad = toRadians(faceAz);
+      const azRad = toRadians(sunAz), elRad = toRadians(sunEl), faceRad = toRadians(faceAz);
       const sx = Math.cos(elRad) * Math.sin(azRad);
       const sy = Math.cos(elRad) * Math.cos(azRad);
       const sz = Math.sin(elRad);
-      const nx = Math.sin(faceRad);
-      const ny = Math.cos(faceRad);
-      const nz = 0;
-      return Math.max(0, sx*nx + sy*ny + sz*nz);
+      return Math.max(0, sx*Math.sin(faceRad) + sy*Math.cos(faceRad) + sz*0);
     }
 
     function normalize(arr) {
@@ -199,144 +180,123 @@
       return max === 0 ? arr : arr.map(v => v / max);
     }
 
-    function formatTime(date) {
-      const hours = date.getUTCHours().toString().padStart(2, '0');
-      const minutes = date.getUTCMinutes().toString().padStart(2, '0');
-      return `${hours}:${minutes}`;
-    }
-
     function azimuthToCompass(angle) {
-      const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-      const index = Math.round(((angle % 360) + 360) % 360 / 45) % 8;
-      return directions[index];
+      const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+      return dirs[Math.round(((angle % 360) + 360) % 360 / 45) % 8];
     }
 
-    function createHatchPattern(color) {
-      const patternCanvas = document.createElement('canvas');
-      patternCanvas.width = 8;
-      patternCanvas.height = 8;
-      const pc = patternCanvas.getContext('2d');
-      pc.strokeStyle = color;
-      pc.lineWidth = 1;
-      pc.beginPath();
-      pc.moveTo(0, 8);
-      pc.lineTo(8, 0);
-      pc.stroke();
-      return ctx.createPattern(patternCanvas, 'repeat');
+    function formatTime(date) {
+      return `${date.getUTCHours().toString().padStart(2,'0')}:${date.getUTCMinutes().toString().padStart(2,'0')}`;
     }
 
     function formatLocalTime(date, offset) {
-      const localMs = date.getTime() + offset * 3600 * 1000;
-      const local = new Date(localMs);
-      const h = local.getUTCHours().toString().padStart(2, '0');
-      const m = local.getUTCMinutes().toString().padStart(2, '0');
-      return `${h}:${m}`;
+      const local = new Date(date.getTime() + offset * 3600 * 1000);
+      return `${local.getUTCHours().toString().padStart(2,'0')}:${local.getUTCMinutes().toString().padStart(2,'0')}`;
     }
 
+    // ─── Chart ────────────────────────────────────────────────────────────────
     function drawChart(times, elevation, illumination, tzLabel) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const margin = 60;
-      const width = canvas.width - margin * 2;
-      const height = canvas.height - margin * 2;
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const m = { top: 55, right: 44, bottom: 62, left: 58 };
+      const cW = W - m.left - m.right, cH = H - m.top - m.bottom;
       const count = times.length;
 
-      ctx.strokeStyle = 'rgba(148,163,184,0.28)';
+      // Dark background
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, '#0c0a1a');
+      bg.addColorStop(1, '#1a0f00');
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      ctx.roundRect(0, 0, W, H, 18);
+      ctx.fill();
+
+      // Grid
+      ctx.strokeStyle = 'rgba(148,163,184,0.08)';
       ctx.lineWidth = 1;
       for (let i = 0; i <= 6; i++) {
-        const y = margin + i * (height / 6);
-        ctx.beginPath();
-        ctx.moveTo(margin, y);
-        ctx.lineTo(canvas.width - margin, y);
-        ctx.stroke();
+        const y = m.top + i * (cH / 6);
+        ctx.beginPath(); ctx.moveTo(m.left, y); ctx.lineTo(m.left + cW, y); ctx.stroke();
       }
       for (let i = 0; i <= 6; i++) {
-        const x = margin + i * (width / 6);
-        ctx.beginPath();
-        ctx.moveTo(x, margin);
-        ctx.lineTo(x, canvas.height - margin);
-        ctx.stroke();
+        const x = m.left + i * (cW / 6);
+        ctx.beginPath(); ctx.moveTo(x, m.top); ctx.lineTo(x, m.top + cH); ctx.stroke();
       }
 
-      ctx.font = '13px Inter, Arial';
-      ctx.fillStyle = '#0f172a';
-      ctx.fillText('Local timezone: ' + tzLabel, margin, 24);
-      ctx.fillText('Face azimuth: ' + Math.round(state.faceAzimuth) + '°', margin, 46);
-      ctx.fillText('Sun elevation (blue)', margin, 68);
-      ctx.fillText('Face illumination (orange dashed)', margin, 86);
+      const xOf = index => m.left + (index / Math.max(1, count - 1)) * cW;
+      const yOf = value  => m.top + cH - value * cH;
 
-      const pattern = createHatchPattern('rgba(59, 130, 246, 0.30)');
-      ctx.fillStyle = pattern;
+      // Elevation fill
+      const elFill = ctx.createLinearGradient(0, m.top, 0, m.top + cH);
+      elFill.addColorStop(0, 'rgba(37,99,235,0.35)');
+      elFill.addColorStop(1, 'rgba(37,99,235,0.03)');
+      ctx.fillStyle = elFill;
       ctx.beginPath();
-      elevation.forEach((value, index) => {
-        const x = margin + (index / Math.max(1, count - 1)) * width;
-        const y = canvas.height - margin - value * height;
-        if (index === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      for (let index = count - 1; index >= 0; index--) {
-        const x = margin + (index / Math.max(1, count - 1)) * width;
-        const y = canvas.height - margin - illumination[index] * height;
-        ctx.lineTo(x, y);
-      }
+      elevation.forEach((v, i) => { const x = xOf(i), y = yOf(v); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
+      for (let i = count-1; i >= 0; i--) ctx.lineTo(xOf(i), yOf(illumination[i]));
       ctx.closePath();
       ctx.fill();
 
+      // Elevation line
       ctx.save();
-      ctx.shadowColor = 'rgba(37,99,235,0.2)';
-      ctx.shadowBlur = 14;
-      ctx.strokeStyle = '#2563eb';
-      ctx.lineWidth = 4;
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(37,99,235,0.4)'; ctx.shadowBlur = 14;
+      ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 3.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.beginPath();
-      elevation.forEach((value, index) => {
-        const x = margin + (index / Math.max(1, count - 1)) * width;
-        const y = canvas.height - margin - value * height;
-        if (index === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
+      elevation.forEach((v, i) => { const x = xOf(i), y = yOf(v); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
       ctx.stroke();
       ctx.restore();
 
-      ctx.strokeStyle = '#fb923c';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([8, 5]);
+      // Illumination line (dashed orange)
+      ctx.strokeStyle = '#f97316'; ctx.lineWidth = 3; ctx.setLineDash([9,5]);
       ctx.beginPath();
-      illumination.forEach((value, index) => {
-        const x = margin + (index / Math.max(1, count - 1)) * width;
-        const y = canvas.height - margin - value * height;
-        if (index === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
+      illumination.forEach((v, i) => { const x = xOf(i), y = yOf(v); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = '#334155';
-      ctx.font = '12px Arial';
+
+      // X axis time labels
+      ctx.fillStyle = '#64748b'; ctx.font = '11px Inter,Arial,sans-serif'; ctx.textAlign = 'center';
       const labelCount = Math.min(6, Math.max(1, count - 1));
       for (let i = 0; i <= labelCount; i++) {
         const idx = Math.round((i / labelCount) * (count - 1));
-        const x = margin + (idx / Math.max(1, count - 1)) * width;
-        const label = formatTime(times[idx]);
-        ctx.fillText(label, x - 18, canvas.height - margin + 18);
+        ctx.fillText(formatTime(times[idx]), xOf(idx), m.top + cH + 18);
       }
-      ctx.fillText('0.0', 10, canvas.height - margin);
-      ctx.fillText('1.0', 12, margin + 14);
-      ctx.strokeStyle = '#0f172a';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(margin, margin, width, height);
-      ctx.fillStyle = '#2563eb';
-      ctx.fillRect(canvas.width - margin - 260, margin + 10, 14, 14);
-      ctx.fillStyle = '#0f172a';
-      ctx.fillText('Sun elevation', canvas.width - margin - 236, margin + 22);
-      ctx.fillStyle = '#f97316';
-      ctx.fillRect(canvas.width - margin - 260, margin + 36, 14, 14);
-      ctx.fillStyle = '#0f172a';
-      ctx.fillText('Face illumination', canvas.width - margin - 236, margin + 48);
+
+      // Y axis labels
+      ctx.fillStyle = '#94a3b8'; ctx.textAlign = 'right';
+      ['0.0','0.25','0.5','0.75','1.0'].forEach((lbl, i) => {
+        ctx.fillText(lbl, m.left - 8, yOf(i / 4) + 4);
+      });
+
+      // Axis label
+      ctx.fillStyle = '#64748b'; ctx.textAlign = 'left'; ctx.font = '11px Inter,Arial,sans-serif';
+      ctx.fillText('Normalised value', m.left, m.top - 8);
+
+      // Timezone label top-right
+      ctx.fillStyle = '#94a3b8'; ctx.textAlign = 'right';
+      ctx.fillText('Local ' + tzLabel + '  ·  Face: ' + Math.round(state.faceAzimuth) + '° ' + azimuthToCompass(state.faceAzimuth), W - m.right, m.top - 8);
+
+      // Border
+      ctx.strokeStyle = 'rgba(148,163,184,0.18)'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(m.left, m.top, cW, cH);
+
+      // Legend
+      const lx = W - m.right - 12;
+      ctx.fillStyle = '#3b82f6'; ctx.fillRect(lx - 100, m.top + 12, 12, 12);
+      ctx.fillStyle = '#94a3b8'; ctx.font = '11px Inter,Arial,sans-serif'; ctx.textAlign = 'right';
+      ctx.fillText('Sun elevation', lx, m.top + 23);
+
+      ctx.strokeStyle = '#f97316'; ctx.lineWidth = 2.5; ctx.setLineDash([7,4]);
+      ctx.beginPath(); ctx.moveTo(lx - 100, m.top + 44); ctx.lineTo(lx - 88, m.top + 44); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('Face illumination', lx, m.top + 48);
     }
 
+    // ─── Status update & render ───────────────────────────────────────────────
     function updateStatus() {
-      latVal.textContent = state.latitude !== null ? state.latitude.toFixed(6) : '--';
-      lonVal.textContent = state.longitude !== null ? state.longitude.toFixed(6) : '--';
+      latVal.textContent  = state.latitude  !== null ? state.latitude.toFixed(6)  : '--';
+      lonVal.textContent  = state.longitude !== null ? state.longitude.toFixed(6) : '--';
       dateVal.textContent = state.date.toISOString().slice(0, 10);
       faceVal.textContent = `${Math.round(state.faceAzimuth)}° ${azimuthToCompass(state.faceAzimuth)}`;
       manualAz.value = Math.round(state.faceAzimuth);
@@ -346,47 +306,37 @@
     function handleOrientation(event) {
       if (state.appFaceSource) return;
       if (event.alpha === null) return;
-      let az = event.alpha;
-      if (typeof event.webkitCompassHeading === 'number') {
-        az = event.webkitCompassHeading;
-      }
-      az = (az + 360) % 360;
-      state.faceAzimuth = az;
+      let az = typeof event.webkitCompassHeading === 'number' ? event.webkitCompassHeading : event.alpha;
+      state.faceAzimuth = (az + 360) % 360;
       state.hasCompass = true;
       updateStatus();
     }
 
     function startSensors() {
       if ('geolocation' in navigator) {
-        navigator.geolocation.watchPosition(position => {
-          state.latitude = position.coords.latitude;
-          state.longitude = position.coords.longitude;
+        navigator.geolocation.watchPosition(pos => {
+          state.latitude = pos.coords.latitude;
+          state.longitude = pos.coords.longitude;
           state.hasLocation = true;
           state.date = new Date();
           updateStatus();
-        }, err => {
-          infoText.textContent = 'Location access denied or unavailable.';
-        }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 });
+        }, () => { statusNote.textContent = 'Location access denied or unavailable.'; },
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 });
       } else {
-        infoText.textContent = 'Geolocation not supported.';
+        statusNote.textContent = 'Geolocation not supported.';
       }
 
       if (window.DeviceOrientationEvent) {
         if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-          DeviceOrientationEvent.requestPermission().then(permissionState => {
-            if (permissionState === 'granted') {
-              window.addEventListener('deviceorientation', handleOrientation);
-            } else {
-              infoText.textContent = 'Compass permission denied.';
-            }
-          }).catch(() => {
-            infoText.textContent = 'Compass permission not granted.';
-          });
+          DeviceOrientationEvent.requestPermission().then(s => {
+            if (s === 'granted') window.addEventListener('deviceorientation', handleOrientation);
+            else statusNote.textContent = 'Compass permission denied.';
+          }).catch(() => { statusNote.textContent = 'Compass permission not granted.'; });
         } else {
           window.addEventListener('deviceorientation', handleOrientation);
         }
       } else {
-        infoText.textContent = 'Device orientation not supported.';
+        statusNote.textContent = 'Device orientation not supported.';
       }
     }
 
@@ -396,46 +346,43 @@
       const hasLocation = state.latitude !== null && state.longitude !== null;
       const lat = hasLocation ? state.latitude : 37.99;
       const lon = hasLocation ? state.longitude : 23.66;
-      const faceAzimuth = state.faceAzimuth;
       const date = state.date || new Date();
-	  const localOffset = -new Date().getTimezoneOffset() / 60;
+      const localOffset = -new Date().getTimezoneOffset() / 60;
       const tzLabel = 'UTC' + (localOffset >= 0 ? '+' + localOffset : localOffset);
       const [year, month, day] = date.toISOString().slice(0, 10).split('-').map(Number);
-      const startLocal = Date.UTC(year, month - 1, day, 0, 0) - localOffset * 3600 * 1000;
+      const startLocal = Date.UTC(year, month-1, day, 0, 0) - localOffset * 3600 * 1000;
       const points = [];
-      const stepMinutes = 5;
-      const steps = 24 * 60 / stepMinutes;
+      const stepMinutes = 5, steps = 24 * 60 / stepMinutes;
       for (let i = 0; i <= steps; i++) {
         const currentUtc = new Date(startLocal + i * stepMinutes * 60000);
         const pos = solarPosition(currentUtc, lat, lon, localOffset);
-        const illum = illuminationStrength(pos.azimuth, pos.elevation, faceAzimuth);
+        const illum = illuminationStrength(pos.azimuth, pos.elevation, state.faceAzimuth);
         points.push({ time: new Date(currentUtc.getTime() + localOffset * 3600 * 1000), elevation: pos.elevation, illumination: illum });
       }
       const sunriseIndex = points.findIndex(p => p.elevation > 0);
-      const sunsetIndex = points.length - 1 - [...points].reverse().findIndex(p => p.elevation > 0);
+      const sunsetIndex  = points.length - 1 - [...points].reverse().findIndex(p => p.elevation > 0);
       const clipStart = sunriseIndex >= 0 ? Math.max(0, sunriseIndex - 1) : 0;
-      const clipEnd = sunsetIndex >= 0 ? Math.min(points.length, sunsetIndex + 1) : points.length;
+      const clipEnd   = sunsetIndex  >= 0 ? Math.min(points.length, sunsetIndex + 1) : points.length;
       const clipped = points.slice(clipStart, clipEnd);
-      const normalizedElevation = normalize(clipped.map(p => Math.max(0, p.elevation)));
-      const normalizedIllumination = normalize(clipped.map(p => p.illumination));
-      drawChart(clipped.map(p => p.time), normalizedElevation, normalizedIllumination, tzLabel);
+      const normEl   = normalize(clipped.map(p => Math.max(0, p.elevation)));
+      const normIll  = normalize(clipped.map(p => p.illumination));
+      drawChart(clipped.map(p => p.time), normEl, normIll, tzLabel);
       const sunriseText = hasLocation && sunriseIndex >= 0 ? formatLocalTime(points[sunriseIndex].time, 0) : '--';
-      const sunsetText = hasLocation && sunsetIndex >= 0 ? formatLocalTime(points[sunsetIndex].time, 0) : '--';
-      const directionText = azimuthToCompass(faceAzimuth);
-      const locationNote = hasLocation ? '' : ' (location pending, using Athens coords)';
-      infoText.textContent = `Latitude=${hasLocation ? lat.toFixed(6) : '--'}, Longitude=${hasLocation ? lon.toFixed(6) : '--'}, face=${Math.round(faceAzimuth)}° ${directionText}, local ${tzLabel}${locationNote}, sunrise=${sunriseText}, sunset=${sunsetText}`;
+      const sunsetText  = hasLocation && sunsetIndex  >= 0 ? formatLocalTime(points[sunsetIndex].time, 0)  : '--';
+      const locationNote = hasLocation ? '' : ' (no GPS — using Athens)';
+      infoText.textContent = `Lat=${hasLocation ? lat.toFixed(5) : '--'}, Lon=${hasLocation ? lon.toFixed(5) : '--'}, face=${Math.round(state.faceAzimuth)}° ${azimuthToCompass(state.faceAzimuth)}, ${tzLabel}${locationNote} · Sunrise=${sunriseText} · Sunset=${sunsetText}`;
     }
 
-    manualAz.addEventListener('input', event => {
-      state.faceAzimuth = Number(event.target.value);
-      state.hasCompass = true;
-      state.appFaceSource = false;
+    // ─── Events ───────────────────────────────────────────────────────────────
+    manualAz.addEventListener('input', e => {
+      state.faceAzimuth = Number(e.target.value);
+      state.hasCompass = true; state.appFaceSource = false;
       updateStatus();
     });
 
     startBtn.addEventListener('click', () => {
       startSensors();
-      startBtn.textContent = 'Sensors requested';
+      startBtn.textContent = '📡 Sensors requested…';
     });
 
     applyUrlParams();
@@ -443,14 +390,9 @@
     updateStatus();
 
     setInterval(() => {
-      const oldLat = state.latitude;
-      const oldLon = state.longitude;
-      const oldFace = state.faceAzimuth;
-      applyUrlParams();
-      applyAppInventorParams();
-      if (state.latitude !== oldLat || state.longitude !== oldLon || state.faceAzimuth !== oldFace) {
-        updateStatus();
-      }
+      const oldLat = state.latitude, oldLon = state.longitude, oldFace = state.faceAzimuth;
+      applyUrlParams(); applyAppInventorParams();
+      if (state.latitude !== oldLat || state.longitude !== oldLon || state.faceAzimuth !== oldFace) updateStatus();
     }, 500);
   </script>
 </body>

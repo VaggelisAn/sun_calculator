@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Moon Phase Viewer</title>
+  <style>
+    body { font-family: Inter, Arial, sans-serif; margin: 12px; background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%); color: #e2e8f0; min-height: 100vh; }
+    h1 { margin: 0 0 10px; font-size: 1.5rem; color: #e2e8f0; display: flex; align-items: center; gap: 10px; }
+    .panel { background: rgba(255,255,255,0.05); border-radius: 22px; padding: 18px; box-shadow: 0 22px 44px rgba(0,0,0,0.4); margin-bottom: 18px; border: 1px solid rgba(148,163,184,0.15); backdrop-filter: blur(8px); }
+    button { width: 100%; padding: 14px 16px; margin-top: 12px; background: #4f46e5; color: white; border: none; border-radius: 14px; font-size: 1rem; cursor: pointer; font-weight: 600; transition: background 0.2s; }
+    button:hover { background: #4338ca; }
+    .status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+    .status div { background: rgba(255,255,255,0.07); border-radius: 14px; padding: 14px; font-size: 0.92rem; color: #94a3b8; border: 1px solid rgba(148,163,184,0.1); }
+    .status div strong { display: block; color: #c7d2fe; margin-bottom: 4px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .status div span { color: #f1f5f9; font-size: 1rem; font-weight: 600; }
+    canvas { width: 100%; max-width: 1200px; height: auto; border-radius: 18px; border: 1px solid rgba(99,102,241,0.3); background: transparent; display: block; }
+    .note { margin-top: 10px; font-size: 0.88rem; color: #64748b; line-height: 1.5; }
+    .moon-icon { font-size: 2rem; }
+    label { display: block; margin-top: 12px; font-size: 0.9rem; color: #94a3b8; }
+    input[type=date] { width: 100%; margin-top: 6px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.2); background: rgba(255,255,255,0.07); color: #f1f5f9; font-size: 1rem; box-sizing: border-box; }
+    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1) opacity(0.6); }
+    .highlight { color: #a5b4fc; font-weight: 600; }
+    .full-moon-badge { display: inline-block; background: linear-gradient(135deg, #4f46e5, #7c3aed); border-radius: 8px; padding: 2px 8px; font-size: 0.78rem; color: #fff; margin-left: 6px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+
+  <div class="panel">
+    <h1><span class="moon-icon">🌕</span> Moon Phase Viewer</h1>
+
+    <div class="status">
+      <div><strong>Moon Phase</strong><span id="phaseName">--</span></div>
+      <div><strong>Illumination</strong><span id="illumVal">--</span></div>
+      <div><strong>Next Full Moon</strong><span id="nextFull">--</span></div>
+      <div><strong>Days Until Full</strong><span id="daysLeft">--</span></div>
+      <div><strong>Moonrise</strong><span id="moonrise">--</span></div>
+      <div><strong>Moonset</strong><span id="moonset">--</span></div>
+      <div><strong>Latitude</strong><span id="latVal">--</span></div>
+      <div><strong>Longitude</strong><span id="lonVal">--</span></div>
+    </div>
+
+    <label>Choose date to inspect
+      <input type="date" id="dateInput" />
+    </label>
+
+    <button id="locBtn">📍 Use My Location</button>
+    <div class="note" id="statusNote">Tap "Use My Location" or send lat/lon from App Inventor. Calculations are fully offline using astronomical algorithms.</div>
+  </div>
+
+  <div class="panel">
+    <canvas id="chart" width="1200" height="500"></canvas>
+    <div class="note" id="infoText"></div>
+  </div>
+
+  <div class="panel">
+    <h1 style="font-size:1.1rem; margin-bottom:8px;">🗓️ Next 6 Full Moons</h1>
+    <div id="fullMoonList" class="status" style="grid-template-columns: repeat(3, minmax(0,1fr));"></div>
+  </div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+const state = {
+  latitude: null,
+  longitude: null,
+  date: new Date(),
+  lastAppPayload: ''
+};
+
+// ─── DOM refs ─────────────────────────────────────────────────────────────────
+const canvas        = document.getElementById('chart');
+const ctx           = canvas.getContext('2d');
+const phaseName     = document.getElementById('phaseName');
+const illumVal      = document.getElementById('illumVal');
+const nextFull      = document.getElementById('nextFull');
+const daysLeft      = document.getElementById('daysLeft');
+const moonriseEl    = document.getElementById('moonrise');
+const moonsetEl     = document.getElementById('moonset');
+const latVal        = document.getElementById('latVal');
+const lonVal        = document.getElementById('lonVal');
+const dateInput     = document.getElementById('dateInput');
+const statusNote    = document.getElementById('statusNote');
+const infoText      = document.getElementById('infoText');
+const fullMoonList  = document.getElementById('fullMoonList');
+const locBtn        = document.getElementById('locBtn');
+
+// ─── MIT App Inventor 2 integration ──────────────────────────────────────────
+function parseQueryString(qs) {
+  const params = {};
+  if (!qs) return params;
+  const q = qs.startsWith('?') ? qs.substring(1) : qs;
+  q.split('&').forEach(pair => {
+    const [k, v] = pair.split('=');
+    if (k) params[decodeURIComponent(k)] = decodeURIComponent(v || '');
+  });
+  return params;
+}
+
+function applyParams(params) {
+  if (params.lat && params.lon) {
+    const lat = Number(params.lat), lon = Number(params.lon);
+    if (!isNaN(lat) && !isNaN(lon)) {
+      state.latitude  = lat;
+      state.longitude = lon;
+    }
+  }
+  if (params.date) {
+    const d = new Date(params.date);
+    if (!isNaN(d)) state.date = d;
+  }
+}
+
+function applyUrlParams() { applyParams(parseQueryString(window.location.search)); }
+
+function applyAppInventorParams() {
+  const ai2 = (typeof window.AppInventor === 'object' && window.AppInventor)
+            || (typeof AppInventor !== 'undefined' && AppInventor);
+  if (!ai2 || typeof ai2.getWebViewString !== 'function') return;
+  const payload = ai2.getWebViewString();
+  if (!payload || payload === state.lastAppPayload) return;
+  state.lastAppPayload = payload;
+  const t = payload.trim();
+  let params = {};
+  if (t.startsWith('{')) { try { params = JSON.parse(t); } catch(_){} }
+  if (!Object.keys(params).length) params = parseQueryString(t);
+  applyParams(params);
+}
+
+// ─── Astronomical algorithms (Jean Meeus, Astronomical Algorithms) ────────────
+
+/** Julian Day Number from a JS Date (UTC) */
+function toJD(date) {
+  return date.getTime() / 86400000 + 2440587.5;
+}
+
+function fromJD(jd) {
+  return new Date((jd - 2440587.5) * 86400000);
+}
+
+/**
+ * Moon phase angle (0–1) and illumination for a given JD.
+ * Returns { phase [0–1], illumination [0–1], age [days] }
+ * phase 0=New, 0.25=First Quarter, 0.5=Full, 0.75=Last Quarter
+ */
+function moonPhase(jd) {
+  // Lunation since Jan 6 1900 new moon (JD 2415020.75933)
+  const EPOCH_JD = 2415020.75933;
+  const SYNODIC  = 29.53058868;
+  const age = ((jd - EPOCH_JD) % SYNODIC + SYNODIC) % SYNODIC; // days into current cycle
+  const phase = age / SYNODIC; // 0..1
+  // Illumination: (1 - cos(phase * 2π)) / 2
+  const illumination = (1 - Math.cos(phase * 2 * Math.PI)) / 2;
+  return { phase, illumination, age };
+}
+
+function phaseLabel(phase) {
+  // phase 0..1
+  const p = ((phase % 1) + 1) % 1;
+  if (p < 0.0125 || p >= 0.9875) return { name: 'New Moon',         emoji: '🌑' };
+  if (p < 0.25  - 0.0125)        return { name: 'Waxing Crescent',  emoji: '🌒' };
+  if (p < 0.25  + 0.0125)        return { name: 'First Quarter',     emoji: '🌓' };
+  if (p < 0.5   - 0.0125)        return { name: 'Waxing Gibbous',   emoji: '🌔' };
+  if (p < 0.5   + 0.0125)        return { name: 'Full Moon',         emoji: '🌕' };
+  if (p < 0.75  - 0.0125)        return { name: 'Waning Gibbous',   emoji: '🌖' };
+  if (p < 0.75  + 0.0125)        return { name: 'Last Quarter',      emoji: '🌗' };
+  return                                 { name: 'Waning Crescent',  emoji: '🌘' };
+}
+
+/** Find next Full Moon JD after given JD */
+function nextFullMoonJD(jdStart) {
+  const SYNODIC = 29.53058868;
+  const EPOCH_JD = 2415020.75933;
+  const age = ((jdStart - EPOCH_JD) % SYNODIC + SYNODIC) % SYNODIC;
+  // Days until next full moon (phase=0.5 means age=SYNODIC/2)
+  const fullAge = SYNODIC / 2;
+  let daysUntilFull = fullAge - age;
+  if (daysUntilFull < 0) daysUntilFull += SYNODIC;
+  // Refine with Newton-Raphson (just 3 iterations is enough)
+  let jd = jdStart + daysUntilFull;
+  for (let i = 0; i < 5; i++) {
+    const a = ((jd - EPOCH_JD) % SYNODIC + SYNODIC) % SYNODIC;
+    const diff = a - fullAge;
+    jd -= diff * (SYNODIC / 360); // small step correction
+  }
+  if (jd < jdStart) jd += SYNODIC;
+  return jd;
+}
+
+/** Approximate moonrise / moonset for a given date and location (simplified) */
+function moonRiseSet(date, lat, lon) {
+  // Moon's daily motion ≈ 13.176°/day eastward → rises ~50 min later each day
+  // We use a simple geometric approach with moon declination approximation
+  const jd = toJD(date);
+  const D  = jd - 2451545.0; // days from J2000
+
+  // Moon's mean longitude and mean anomaly (degrees)
+  const L = (218.316 + 13.176396 * D) % 360;
+  const M = (134.963 + 13.064993 * D) % 360;
+  const F = (93.272  + 13.229350 * D) % 360;
+
+  // Ecliptic longitude (simplified)
+  const lambda = L + 6.289 * sind(M);
+  // Ecliptic latitude
+  const beta   = 5.128 * sind(F);
+  // Distance (Earth radii, approx)
+  // Moon's declination
+  const eps    = 23.439 - 0.0000004 * D; // obliquity
+  const sinDec = sind(eps) * sind(lambda) * cosd(beta) + cosd(eps) * sind(beta);
+  const dec    = Math.asin(Math.max(-1, Math.min(1, sinDec))) * 180 / Math.PI;
+  const cosRa  = (cosd(lambda) * cosd(beta)) / Math.cos(dec * Math.PI / 180);
+  const ra     = (Math.acos(Math.max(-1, Math.min(1, cosRa))) * 180 / Math.PI);
+  // RA quadrant
+  const raFull = sind(lambda) >= 0 ? ra : 360 - ra;
+
+  // Hour angle for rising (altitude = -0.583° for limb & refraction)
+  const cosH0 = (sind(-0.583) - sind(lat) * sinDec) / (cosd(lat) * Math.cos(dec * Math.PI / 180));
+  if (Math.abs(cosH0) > 1) return { rise: null, set: null }; // always above/below horizon
+  const H0 = Math.acos(cosH0) * 180 / Math.PI;
+
+  // Sidereal time at midnight
+  const theta0 = (100.4606184 + 36000.770004 * ((jd - 2451545.0) / 36525) + lon) % 360;
+  const transit = ((raFull - theta0 + 360) % 360) / 15; // local hours
+
+  let rise = transit - H0 / 15;
+  let set  = transit + H0 / 15;
+  rise = ((rise % 24) + 24) % 24;
+  set  = ((set  % 24) + 24) % 24;
+  return { rise, set };
+}
+
+function sind(d) { return Math.sin(d * Math.PI / 180); }
+function cosd(d) { return Math.cos(d * Math.PI / 180); }
+
+function formatHour(h) {
+  if (h === null) return '--';
+  const totalMin = Math.round(h * 60);
+  const hh = Math.floor(totalMin / 60) % 24;
+  const mm = totalMin % 60;
+  return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+}
+
+function formatDate(date) {
+  return date.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric', weekday:'short' });
+}
+
+// ─── Canvas chart: 30-day illumination cycle ──────────────────────────────────
+function drawChart(centerDate) {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const margin = { top: 50, right: 40, bottom: 60, left: 58 };
+  const cW = W - margin.left - margin.right;
+  const cH = H - margin.top - margin.bottom;
+
+  // Background gradient (deep space)
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0a0a1a');
+  bg.addColorStop(1, '#0f0a2a');
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.roundRect(0, 0, W, H, 18);
+  ctx.fill();
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(148,163,184,0.08)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = margin.top + (i / 4) * cH;
+    ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(margin.left + cW, y); ctx.stroke();
+  }
+
+  // Days: -15 to +15 around center
+  const DAYS = 30;
+  const centerJD = toJD(centerDate);
+  const points = [];
+  for (let d = -DAYS/2; d <= DAYS/2; d += 0.25) {
+    const jd = centerJD + d;
+    const { phase, illumination } = moonPhase(jd);
+    points.push({ d, jd, phase, illumination });
+  }
+
+  const xOf  = d => margin.left + ((d + DAYS/2) / DAYS) * cW;
+  const yOfI = v => margin.top + cH - v * cH;
+
+  // Illumination fill
+  const fillGrad = ctx.createLinearGradient(0, margin.top, 0, margin.top + cH);
+  fillGrad.addColorStop(0, 'rgba(167,139,250,0.35)');
+  fillGrad.addColorStop(1, 'rgba(167,139,250,0.03)');
+  ctx.fillStyle = fillGrad;
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = xOf(p.d), y = yOfI(p.illumination);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(xOf(DAYS/2), margin.top + cH);
+  ctx.lineTo(xOf(-DAYS/2), margin.top + cH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Illumination line
+  ctx.save();
+  ctx.shadowColor = 'rgba(167,139,250,0.5)';
+  ctx.shadowBlur = 12;
+  ctx.strokeStyle = '#a78bfa';
+  ctx.lineWidth = 3;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = xOf(p.d), y = yOfI(p.illumination);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.restore();
+
+  // Mark full moons in range
+  for (let d = -DAYS/2; d <= DAYS/2; ) {
+    const jd = centerJD + d;
+    const nfmJD = nextFullMoonJD(jd);
+    const nd = nfmJD - centerJD;
+    if (nd > DAYS/2) break;
+    const x = xOf(nd);
+    // glow dot
+    ctx.save();
+    ctx.shadowColor = 'rgba(250,220,100,0.9)';
+    ctx.shadowBlur = 22;
+    ctx.fillStyle = '#fde68a';
+    ctx.beginPath();
+    ctx.arc(x, yOfI(1.0), 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // vertical line
+    ctx.strokeStyle = 'rgba(253,230,138,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5,4]);
+    ctx.beginPath();
+    ctx.moveTo(x, margin.top);
+    ctx.lineTo(x, margin.top + cH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // label
+    ctx.fillStyle = '#fde68a';
+    ctx.font = 'bold 11px Inter,Arial,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Full', x, margin.top - 6);
+    d = nd + 1;
+  }
+
+  // New moons
+  const EPOCH_JD = 2415020.75933;
+  const SYNODIC  = 29.53058868;
+  for (let d = -DAYS/2 - SYNODIC; d <= DAYS/2 + SYNODIC; d += SYNODIC) {
+    const jd0 = centerJD + d;
+    const age = ((jd0 - EPOCH_JD) % SYNODIC + SYNODIC) % SYNODIC;
+    const nd = d - age;
+    if (nd < -DAYS/2 || nd > DAYS/2) continue;
+    const x = xOf(nd);
+    ctx.save();
+    ctx.shadowColor = 'rgba(148,163,184,0.5)';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#475569';
+    ctx.beginPath();
+    ctx.arc(x, yOfI(0.0), 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px Inter,Arial,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('New', x, margin.top + cH + 28);
+  }
+
+  // Today vertical line
+  const todayX = xOf(0);
+  ctx.strokeStyle = 'rgba(99,102,241,0.8)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6,4]);
+  ctx.beginPath();
+  ctx.moveTo(todayX, margin.top); ctx.lineTo(todayX, margin.top + cH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#818cf8';
+  ctx.font = 'bold 11px Inter,Arial,sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Today', todayX, margin.top - 6);
+
+  // Today dot
+  const todayPhase = moonPhase(centerJD);
+  const todayY = yOfI(todayPhase.illumination);
+  ctx.save();
+  ctx.shadowColor = 'rgba(99,102,241,0.9)';
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = '#6366f1';
+  ctx.beginPath();
+  ctx.arc(todayX, todayY, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Y axis labels
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '11px Inter,Arial,sans-serif';
+  ctx.textAlign = 'right';
+  ['0%','25%','50%','75%','100%'].forEach((lbl, i) => {
+    const y = margin.top + cH - (i / 4) * cH;
+    ctx.fillText(lbl, margin.left - 8, y + 4);
+  });
+
+  // X axis date labels
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#64748b';
+  ctx.font = '11px Inter,Arial,sans-serif';
+  for (let d = -14; d <= 14; d += 7) {
+    const x = xOf(d);
+    const labelDate = fromJD(centerJD + d);
+    const label = labelDate.toLocaleDateString('en-GB', { day:'numeric', month:'short' });
+    ctx.fillText(label, x, margin.top + cH + 16);
+  }
+
+  // Axis title
+  ctx.fillStyle = '#64748b';
+  ctx.font = '11px Inter,Arial,sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('Illumination %', margin.left, margin.top - 6);
+
+  // Legend
+  const lx = W - margin.right - 10;
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#a78bfa';
+  ctx.fillRect(lx - 90, margin.top + 10, 12, 12);
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillText('Illumination', lx, margin.top + 21);
+
+  ctx.fillStyle = '#fde68a';
+  ctx.beginPath();
+  ctx.arc(lx - 84, margin.top + 40, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillText('Full Moon', lx, margin.top + 44);
+}
+
+// ─── Main render ──────────────────────────────────────────────────────────────
+function render() {
+  applyUrlParams();
+  applyAppInventorParams();
+
+  const lat = state.latitude !== null ? state.latitude : 37.9838;
+  const lon = state.longitude !== null ? state.longitude : 23.7275;
+  const date = state.date;
+  const jd   = toJD(date);
+
+  // Phase info
+  const { phase, illumination, age } = moonPhase(jd);
+  const label = phaseLabel(phase);
+  phaseName.textContent = `${label.emoji} ${label.name}`;
+  illumVal.textContent  = `${(illumination * 100).toFixed(1)}%`;
+
+  // Next full moon
+  const nfmJD   = nextFullMoonJD(jd);
+  const nfmDate = fromJD(nfmJD);
+  const daysToFull = nfmJD - jd;
+  nextFull.textContent = formatDate(nfmDate);
+  daysLeft.textContent = daysToFull < 0.5
+    ? '🌕 Tonight!'
+    : `${daysToFull.toFixed(1)} days`;
+
+  // Moonrise / moonset
+  const rs = moonRiseSet(date, lat, lon);
+  moonriseEl.textContent = rs.rise !== null ? formatHour(rs.rise) : 'N/A';
+  moonsetEl.textContent  = rs.set  !== null ? formatHour(rs.set)  : 'N/A';
+
+  // Coords
+  latVal.textContent = state.latitude  !== null ? lat.toFixed(5) : `${lat.toFixed(5)} (Athens)`;
+  lonVal.textContent = state.longitude !== null ? lon.toFixed(5) : `${lon.toFixed(5)} (Athens)`;
+
+  // Chart
+  drawChart(date);
+
+  // Info text
+  infoText.textContent = `Moon age: ${age.toFixed(1)} days · Phase: ${(phase*100).toFixed(1)}% · Illumination: ${(illumination*100).toFixed(1)}% · Next full moon: ${formatDate(nfmDate)} in ${daysToFull.toFixed(1)} days`;
+
+  // Next 6 full moons list
+  fullMoonList.innerHTML = '';
+  let searchJD = jd;
+  for (let i = 0; i < 6; i++) {
+    const fmJD = nextFullMoonJD(searchJD + 0.1);
+    const fmDate = fromJD(fmJD);
+    const days = fmJD - jd;
+    const el = document.createElement('div');
+    el.innerHTML = `<strong>Full Moon ${i+1}</strong><span>🌕 ${formatDate(fmDate)}</span><br><small style="color:#64748b">in ${days.toFixed(0)} days</small>`;
+    fullMoonList.appendChild(el);
+    searchJD = fmJD + 1;
+  }
+}
+
+// ─── Event listeners ──────────────────────────────────────────────────────────
+locBtn.addEventListener('click', () => {
+  if (!('geolocation' in navigator)) {
+    statusNote.textContent = 'Geolocation not supported on this device.';
+    return;
+  }
+  statusNote.textContent = '📡 Requesting location…';
+  navigator.geolocation.getCurrentPosition(pos => {
+    state.latitude  = pos.coords.latitude;
+    state.longitude = pos.coords.longitude;
+    statusNote.textContent = `📍 Location set: ${state.latitude.toFixed(5)}, ${state.longitude.toFixed(5)}`;
+    render();
+  }, () => {
+    statusNote.textContent = 'Location access denied. Using Athens as default.';
+  }, { enableHighAccuracy: true, timeout: 10000 });
+});
+
+dateInput.addEventListener('change', e => {
+  const d = new Date(e.target.value + 'T12:00:00');
+  if (!isNaN(d)) { state.date = d; render(); }
+});
+
+// Set default date picker value
+const todayStr = new Date().toISOString().slice(0, 10);
+dateInput.value = todayStr;
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+applyUrlParams();
+applyAppInventorParams();
+render();
+
+// Poll for App Inventor updates
+setInterval(() => {
+  const oldLat  = state.latitude;
+  const oldLon  = state.longitude;
+  applyUrlParams();
+  applyAppInventorParams();
+  if (state.latitude !== oldLat || state.longitude !== oldLon) render();
+}, 500);
+</script>
+</body>
+</html>
